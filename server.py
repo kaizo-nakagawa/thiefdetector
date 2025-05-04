@@ -10,6 +10,13 @@ from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.rtcrtpsender import RTCRtpSender
+import cv2
+import numpy as np
+from aiortc import VideoStreamTrack
+from av import VideoFrame
+import asyncio
+import cv2
+
 
 ROOT = os.path.dirname(__file__)
 config = configparser.ConfigParser()
@@ -21,7 +28,54 @@ relay = None
 webcam = None
 
 
+class OpenCVCameraTrack(VideoStreamTrack):
+    def __init__(self, camera_index=0):
+        super().__init__()
+        self.cap = cv2.VideoCapture(camera_index)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        self.cap.set(cv2.CAP_PROP_FPS, 25)
+
+    async def recv(self):
+        pts, time_base = await self.next_timestamp()
+        ret, frame = self.cap.read()
+        if not ret:
+            raise Exception("Failed to read frame from OpenCV camera")
+
+        # Convert frame (BGR to RGB)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        video_frame = VideoFrame.from_ndarray(frame, format="rgb24")
+        video_frame.pts = pts
+        video_frame.time_base = time_base
+        return video_frame
+
+
+# List available cameras
+index = 0
+cameras = []
+while True:
+    cap = cv2.VideoCapture(index)
+    if not cap.read()[0]:
+        break
+    cameras.append(f"Camera ID: {index}")
+    cap.release()
+    index += 1
+
+print("Available cameras:", cameras)
+
+
 def create_local_tracks(play_from, decode):
+    global relay
+
+    if play_from:
+        player = MediaPlayer(play_from, decode=decode)
+        return player.audio, player.video
+    else:
+        video_track = OpenCVCameraTrack(camera_index=int(CAMERA_ID))  # Bisa 0, 1, dst.
+        return None, video_track
+
+
+def create_local_tracksz(play_from, decode):
     global relay, webcam
 
     if play_from:
@@ -29,28 +83,29 @@ def create_local_tracks(play_from, decode):
         return player.audio, player.video
     else:
         # Adjust video_size to a lower resolution
+        # Camera configurations
         options = {
             "framerate": "25",
             "video_size": "320x240",  # Lower resolution
-            "rtbufsize": "32020000",  # Increase buffer size to 7MB (you can adjust this value)
+            "rtbufsize": "32020000",  # Adjust buffer size
         }
-        if relay is None:
-            if platform.system() == "Darwin":
-                camera_format = config["DEFAULT"]["mac_camera_format"]
-                webcam = MediaPlayer(
-                    "default:none", format=camera_format, options=options
-                )
-            elif platform.system() == "Windows":
-                camera_format = config["DEFAULT"]["win_camera_format"]
-                webcam = MediaPlayer(
-                    f"video={CAMERA_ID}", format=camera_format, options=options
-                )
-            else:
-                camera_format = config["DEFAULT"]["lin_camera_format"]
-                webcam = MediaPlayer(
-                    f"/dev/{CAMERA_ID}", format=camera_format, options=options
-                )
-            relay = MediaRelay()
+
+        # Determine OS and set camera format
+        if platform.system() == "Darwin":
+            camera_format = config["DEFAULT"]["mac_camera_format"]
+            camera_source = "default:none"
+        elif platform.system() == "Windows":
+            camera_format = config["DEFAULT"]["win_camera_format"]
+            camera_source = CAMERA_ID  # Ensure CAMERA_ID matches your device name
+        else:
+            camera_format = config["DEFAULT"]["lin_camera_format"]
+            camera_source = f"/dev/{CAMERA_ID}"  # Verify correct Linux device path
+
+        # Initialize MediaPlayer
+        webcam = MediaPlayer(camera_source, format=camera_format, options=options)
+
+        # Use relay for multiple consumers
+        relay = MediaRelay()
         return None, relay.subscribe(webcam.video)
 
 
@@ -138,35 +193,6 @@ async def offer(request):
 
 pcs = set()
 
-import cv2
-
-def list_ports():
-    """
-    Test the ports and returns a tuple with the available ports 
-    and the ones that are working.
-    """
-    is_working = True
-    dev_port = 0
-    working_ports = []
-    available_ports = []
-    while is_working:
-        camera = cv2.VideoCapture(dev_port)
-        if not camera.isOpened():
-            is_working = False
-            print("Port %s is not working." %dev_port)
-        else:
-            is_reading, img = camera.read()
-            w = camera.get(3)
-            h = camera.get(4)
-            if is_reading:
-                print("Port %s is working and reads images (%s x %s)" %(dev_port,h,w))
-                working_ports.append(dev_port)
-            else:
-                print("Port %s for camera ( %s x %s) is present but does not reads." %(dev_port,h,w))
-                available_ports.append(dev_port)
-        dev_port +=1
-    return available_ports,working_ports
-list_ports()
 
 async def stop_server(request):
     logging.info("Stopping camera...")
