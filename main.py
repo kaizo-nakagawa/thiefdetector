@@ -9,9 +9,10 @@ import datetime
 import io
 import threading
 import platform
+import customtkinter as ctk
+import sys
 from pathlib import Path
 from PIL import Image
-import customtkinter as ctk
 from ultralytics.utils.plotting import Annotator, colors
 from models.common import DetectMultiBackend
 from utils.general import non_max_suppression
@@ -734,16 +735,13 @@ class CameraManager:
 class ConfigManager:
     """Mengelola konfigurasi aplikasi"""
 
-    def __init__(self, const_path="config/const.ini", config_path="config/config.ini"):
-        self.const_path = const_path
+    def __init__(self, config_path= "config/config.ini"):
         self.config_path = config_path
         self.config = configparser.ConfigParser()
         self.load_config()
 
     def load_config(self):
         """Muat konfigurasi dari file"""
-        # Muat konstanta
-        self.config.read(self.const_path)
 
         # Muat konfigurasi pengguna jika ada
         user_config = Path(self.config_path)
@@ -1473,3 +1471,9 @@ if __name__ == "__main__":
     # Mulai aplikasi
     app = App()
     app.mainloop()
+    
+    """
+    
+    python -m PyInstaller --onefile --icon=icon.png --add-data "yolo-model;yolo-model" --add-data "config;config" --add-data "models;models" --add-data "utils;utils" --add-data "detected;detected" main.py export.py
+
+    """
