@@ -586,7 +586,7 @@ class DetectionEngine:
 
         return [result, detections]
 
-    def process_frame(self, frame, target, save_image=False, log_callback=None):
+    def process_frame(self, frame, targets, save_image=False, log_callback=None):
         """Proses satu frame dengan logika deteksi"""
         # Lewati pemrosesan jika kita sedang mengirim data
         if self.sending_data:
@@ -595,50 +595,61 @@ class DetectionEngine:
         # Jalankan deteksi
         processed_frame, detections = self.detect(frame)
 
-        # Periksa deteksi target
-        if target in detections:
-            current_time = time.time()
+        # Periksa setiap target
+        target = targets.split(",")
+        for i in range(len(target)):
+            target = target[i].strip()
+            # Periksa deteksi target
+            if target in detections:
+                current_time = time.time()
 
-            if self.target_detected_start_time is None:
-                self.target_detected_start_time = current_time
-            elif current_time - self.target_detected_start_time >= int(
-                self.config.get("min_detect_time")
-            ):
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                log_message = f"{target} terdeteksi pada: {timestamp}\n"
+                if self.target_detected_start_time is None:
+                    self.target_detected_start_time = current_time
+                elif current_time - self.target_detected_start_time >= int(
+                    self.config.get("min_detect_time")
+                ):
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    log_message = f"{target} terdeteksi pada: {timestamp}\n"
 
-                if log_callback:
-                    log_callback(log_message)
-
-                # Simpan gambar jika diaktifkan
-                if save_image:
-                    try:
-                        os.makedirs("detected", exist_ok=True)
-                        cv2.imwrite(
-                            f"detected/{target}_{timestamp}.jpg", processed_frame
-                        )
-                        if log_callback:
-                            log_callback("Gambar berhasil disimpan\n")
-                    except Exception as e:
-                        if log_callback:
-                            log_callback(f"Error menyimpan gambar: {e}\n")
-
-                # Periksa apakah pengiriman data ke server diaktifkan
-                if self.config.get("send_data_enabled", "1") == "1":
-                    # Atur flag untuk menunjukkan kita sedang mengirim data
-                    self.sending_data = True
-
-                    # Gunakan thread terpisah untuk mengirim data
-                    threading.Thread(
-                        target=self.send_data_sync,
-                        args=(processed_frame.copy(), target, timestamp, log_callback),
-                        daemon=True,
-                    ).start()
-                else:
                     if log_callback:
-                        log_callback("Pengiriman data dinonaktifkan dalam pengaturan\n")
+                        log_callback(log_message)
 
-                self.target_detected_start_time = None
+                    # Simpan gambar jika diaktifkan
+                    if save_image:
+                        try:
+                            os.makedirs("detected", exist_ok=True)
+                            cv2.imwrite(
+                                f"detected/{target}_{timestamp}.jpg", processed_frame
+                            )
+                            if log_callback:
+                                log_callback("Gambar berhasil disimpan\n")
+                        except Exception as e:
+                            if log_callback:
+                                log_callback(f"Error menyimpan gambar: {e}\n")
+
+                    # Periksa apakah pengiriman data ke server diaktifkan
+                    if self.config.get("send_data_enabled", "1") == "1":
+                        # Atur flag untuk menunjukkan kita sedang mengirim data
+                        self.sending_data = True
+
+                        # Gunakan thread terpisah untuk mengirim data
+                        threading.Thread(
+                            target=self.send_data_sync,
+                            args=(
+                                processed_frame.copy(),
+                                target,
+                                timestamp,
+                                log_callback,
+                            ),
+                            daemon=True,
+                        ).start()
+                    else:
+                        if log_callback:
+                            log_callback(
+                                "Pengiriman data dinonaktifkan dalam pengaturan\n"
+                            )
+
+                    self.target_detected_start_time = None
 
         return processed_frame
 
@@ -735,7 +746,7 @@ class CameraManager:
 class ConfigManager:
     """Mengelola konfigurasi aplikasi"""
 
-    def __init__(self, config_path= "config/config.ini"):
+    def __init__(self, config_path="config/config.ini"):
         self.config_path = config_path
         self.config = configparser.ConfigParser()
         self.load_config()
@@ -871,7 +882,7 @@ class App(ctk.CTk):
         self.detection_label = ctk.CTkLabel(self.control_frame, text="Target Deteksi:")
         self.detection_label.grid(row=2, column=0, padx=5, pady=5, sticky="w")
 
-        target_value = self.config_manager.get("target", "perampokan")
+        target_value = self.config_manager.get("target", "-")
         self.detection_target_display = ctk.CTkLabel(
             self.control_frame,
             text=target_value,
@@ -1039,7 +1050,7 @@ class App(ctk.CTk):
         self.title(app_name)
 
         # Perbarui tampilan target deteksi
-        target_value = self.config_manager.get("target", "perampokan")
+        target_value = self.config_manager.get("target", "-")
         self.detection_target_display.configure(text=target_value)
 
         # Perbarui indikator status server
@@ -1076,7 +1087,7 @@ class App(ctk.CTk):
         self.video_label.configure(image=img_tk, text="")
         self.video_label.image = img_tk
 
-    def detection_loop(self, target):
+    def detection_loop(self, targets):
         """Loop deteksi utama yang berjalan di thread terpisah"""
         # Inisialisasi kamera
         camera_index = self.camera_manager.camera_index
@@ -1109,7 +1120,7 @@ class App(ctk.CTk):
                 if frame_count % frame_skip == 0:
                     # Proses frame
                     processed_frame = self.detection_engine.process_frame(
-                        frame, target, self.save_image, self.log
+                        frame, targets, self.save_image, self.log
                     )
 
                     # Perbarui UI jika diaktifkan
@@ -1471,7 +1482,7 @@ if __name__ == "__main__":
     # Mulai aplikasi
     app = App()
     app.mainloop()
-    
+
     """
     
     python -m PyInstaller --onefile --icon=icon.png --add-data "yolo-model;yolo-model" --add-data "config;config" --add-data "models;models" --add-data "utils;utils" --add-data "detected;detected" main.py export.py
