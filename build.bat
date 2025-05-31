@@ -1,0 +1,2 @@
+@echo off
+echo python -m PyInstaller --onefile --icon=icon.png --add-data "yolo-model;yolo-model" --add-data "config;config" --add-data "models;models" --add-data "utils;utils" --add-data "detected;detected" main.py export.py
