@@ -594,18 +594,18 @@ class DetectionEngine:
 
         # Jalankan deteksi
         processed_frame, detections = self.detect(frame)
-
         # Periksa setiap target
-        target = targets.split(",")
-        for i in range(len(target)):
-            target = target[i].strip()
+        targetz = targets.split(",")
+        if(self.target_detected_start_time == None):
+            self.target_detected_start_time = {target: None for target in targetz}
+        for i in range(len(targetz)):
+            target = targetz[i].strip()
             # Periksa deteksi target
             if target in detections:
                 current_time = time.time()
-
-                if self.target_detected_start_time is None:
-                    self.target_detected_start_time = current_time
-                elif current_time - self.target_detected_start_time >= int(
+                if self.target_detected_start_time[target] is None:
+                    self.target_detected_start_time[target] = current_time
+                elif current_time - self.target_detected_start_time[target] >= int(
                     self.config.get("min_detect_time")
                 ):
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -643,13 +643,8 @@ class DetectionEngine:
                             ),
                             daemon=True,
                         ).start()
-                    else:
-                        if log_callback:
-                            log_callback(
-                                "Pengiriman data dinonaktifkan dalam pengaturan\n"
-                            )
 
-                    self.target_detected_start_time = None
+                    self.target_detected_start_time[target] = None
 
         return processed_frame
 
@@ -672,46 +667,80 @@ class DetectionEngine:
 
     async def send_data(self, img, label, timestamp, log_callback=None):
         """Kirim data deteksi ke server"""
-        server_endpoint = self.config.get("server_image_endpoint")
-        if not server_endpoint:
-            if log_callback:
-                log_callback("Endpoint server tidak dikonfigurasi\n")
-            return
-
         try:
+            server_endpoint = self.config.get("server_image_endpoint")
+            data_endpoint = self.config.get("server_data_endpoint")
+
+            if not server_endpoint or not data_endpoint:
+                msg = "Endpoint server tidak dikonfigurasi\n"
+                if log_callback:
+                    log_callback(msg)
+                return
+
+            # Validate required config values
+            required_configs = ["longitude", "latitude"]
+            for config_key in required_configs:
+                if not self.config.get(config_key):
+                    msg = f"Konfigurasi {config_key} tidak ditemukan\n"
+                    if log_callback:
+                        log_callback(msg)
+                    return
+
             # Kompres gambar
+            if img is None or not isinstance(img, np.ndarray):
+                msg = "Gambar tidak valid\n"
+                if log_callback:
+                    log_callback(msg)
+                return
+
             _, img_encoded = cv2.imencode(
                 ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
             )
-            f = io.BytesIO(img_encoded.tobytes())
+            img_bytes = img_encoded.tobytes()
 
             if log_callback:
                 log_callback(f"Mengirim data ke server: {server_endpoint}\n")
 
             async with ClientSession() as session:
+                # First request - send image
                 form = FormData()
                 form.add_field(
                     "image",
-                    f.getvalue(),
+                    img_bytes,
                     filename=f"{label}_{timestamp}.jpg",
                     content_type="image/jpeg",
                 )
 
-                headers = {
-                    "X-Label": label,
-                    "X-Timestamp": timestamp,
-                }
-
+                headers = {"X-Label": label, "X-Timestamp": timestamp}
                 async with session.post(
                     server_endpoint, data=form, headers=headers
                 ) as response:
                     response.raise_for_status()
                     if log_callback:
-                        log_callback(f"Respons server: {await response.text()}\n")
+                        log_callback(f"Respons image server: {await response.text()}\n")
 
+                # Second request - send metadata
+                formdata = FormData()
+                fname = f"{label}_{timestamp}"
+                formdata.add_field(
+                    "long",
+                    str(self.config.get("longitude")),  # Ensure string
+                )
+                formdata.add_field(
+                    "lat",
+                    str(self.config.get("latitude")),  # Ensure string
+                )
+                formdata.add_field("plaintext", fname)
+                formdata.add_field("image", fname + ".jpg")
+
+                async with session.post(data_endpoint, data=formdata) as response:
+                    response.raise_for_status()
+                    if log_callback:
+                        log_callback(f"Respons data server: {await response.text()}\n")
         except Exception as e:
+            msg = f"Error mengirim data: {e}\n"
             if log_callback:
-                log_callback(f"Error mengirim data: {e}\n")
+                log_callback(msg)
 
 
 class CameraManager:
