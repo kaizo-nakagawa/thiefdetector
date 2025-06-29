@@ -587,26 +587,30 @@ class DetectionEngine:
         return [result, detections]
 
     def process_frame(self, frame, targets, save_image=False, log_callback=None):
-        """Proses satu frame dengan logika deteksi"""
-        # Lewati pemrosesan jika kita sedang mengirim data
         if self.sending_data:
             return frame
 
-        # Jalankan deteksi
         processed_frame, detections = self.detect(frame)
-        # Periksa setiap target
-        targetz = targets.split(",")
-        if(self.target_detected_start_time == None):
+        if processed_frame is None:
+            return frame
+
+        targetz = [t.strip() for t in targets.split(",") if t.strip()]
+        if self.target_detected_start_time is None:
             self.target_detected_start_time = {target: None for target in targetz}
-        for i in range(len(targetz)):
-            target = targetz[i].strip()
-            # Periksa deteksi target
+
+        try:
+            detect_time = int(self.config.get("min_detect_time", 2))
+        except ValueError:
+            detect_time = 2
+
+        for target in targetz:
             if target in detections:
                 current_time = time.time()
-                if self.target_detected_start_time[target] is None:
+                if self.target_detected_start_time.get(target) is None:
                     self.target_detected_start_time[target] = current_time
-                elif current_time - self.target_detected_start_time[target] >= int(
-                    self.config.get("min_detect_time")
+                elif (
+                    current_time - self.target_detected_start_time[target]
+                    >= detect_time
                 ):
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                     log_message = f"{target} terdeteksi pada: {timestamp}\n"
@@ -614,7 +618,6 @@ class DetectionEngine:
                     if log_callback:
                         log_callback(log_message)
 
-                    # Simpan gambar jika diaktifkan
                     if save_image:
                         try:
                             os.makedirs("detected", exist_ok=True)
@@ -627,12 +630,8 @@ class DetectionEngine:
                             if log_callback:
                                 log_callback(f"Error menyimpan gambar: {e}\n")
 
-                    # Periksa apakah pengiriman data ke server diaktifkan
                     if self.config.get("send_data_enabled", "1") == "1":
-                        # Atur flag untuk menunjukkan kita sedang mengirim data
                         self.sending_data = True
-
-                        # Gunakan thread terpisah untuk mengirim data
                         threading.Thread(
                             target=self.send_data_sync,
                             args=(
@@ -645,6 +644,8 @@ class DetectionEngine:
                         ).start()
 
                     self.target_detected_start_time[target] = None
+            else:
+                self.target_detected_start_time[target] = None
 
         return processed_frame
 
