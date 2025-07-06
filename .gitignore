@@ -68,6 +68,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+dist
 env/
 build/
 develop-eggs/
@@ -250,3 +251,4 @@ crashlytics-build.properties
 fabric.properties
 
 ../Ev/*
+node_modules
