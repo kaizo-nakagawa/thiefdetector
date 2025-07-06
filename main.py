@@ -6,15 +6,14 @@ import cv2
 import numpy as np
 import asyncio
 import datetime
-import io
 import threading
 import platform
 import customtkinter as ctk
-import sys
 from pathlib import Path
 from PIL import Image
 from ultralytics.utils.plotting import Annotator, colors
 from models.common import DetectMultiBackend
+from ultralytics import YOLO
 from utils.general import non_max_suppression
 from aiohttp import ClientSession, FormData
 
@@ -514,9 +513,7 @@ class DetectionEngine:
             if log_callback:
                 log_callback("Memuat model YOLO...\n")
 
-            self.model = DetectMultiBackend(
-                self.config.get("yolo_weights"), device=self.device
-            )
+            self.model = YOLO(self.config.get("yolo_weights"))
 
             if log_callback:
                 log_callback("Mesin Deteksi Siap\n")
@@ -529,62 +526,23 @@ class DetectionEngine:
             raise
 
     def detect(self, frame):
-        """Jalankan deteksi YOLO pada frame dengan mirroring"""
-        # Mirror (flip) gambar sebelum diproses
-        mirrored_frame = cv2.flip(frame, 1)  # 1 untuk flip horizontal
-
-        # Simpan dimensi asli
-        original_h, original_w = mirrored_frame.shape[:2]
-
-        # Ubah ukuran dan normalisasi gambar
-        img_resized = cv2.resize(mirrored_frame, (640, 640))
-        img_tensor = (
-            torch.from_numpy(img_resized)
-            .to(self.device)
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .float()
-            / 255.0
+        mirrored_frame = cv2.flip(frame, 1)
+        results = self.model(
+            mirrored_frame,
+            conf=float(self.config.get("min_conf_threshold", 0.25)),
+            verbose=False,
         )
-
-        # Jalankan inferensi
-        with torch.no_grad():
-            pred = self.model(img_tensor)
-            pred = non_max_suppression(
-                pred, conf_thres=float(self.config.get("min_conf_threshold"))
-            )
-
-        # Proses deteksi
+        r = results[0]
         detections = []
-        annotator = Annotator(mirrored_frame, line_width=2)
-
-        # Faktor skala
-        x_scale = original_w / 640
-        y_scale = original_h / 640
-
-        for det in pred[0]:
-            if det is not None and len(det):
-                *xyxy, conf, cls = det
-                label = self.model.names[int(cls)]
-                detections.append(label)
-
-                if self.config.get("annotate") == "1":
-                    # Skala koordinat bounding box ke ukuran asli
-                    xyxy = [
-                        int(xyxy[0] * x_scale),
-                        int(xyxy[1] * y_scale),
-                        int(xyxy[2] * x_scale),
-                        int(xyxy[3] * y_scale),
-                    ]
-                    img_label = f"{label} {conf:.2f}"
-                    annotator.box_label(xyxy, img_label, color=colors(int(cls), True))
-
-        # Dapatkan hasil anotasi
-        result = (
-            annotator.result() if self.config.get("annotate") == "1" else mirrored_frame
-        )
-
-        return [result, detections]
+        for box in r.boxes:
+            class_id = int(box.cls[0])  # Ambil ID kelas sebagai integer
+            label = self.model.names[class_id]  # Dapatkan nama dari ID kelas
+            detections.append(label)
+        if self.config.get("annotate") == "1":
+            result_frame = r.plot()
+        else:
+            result_frame = mirrored_frame
+        return [result_frame, detections]
 
     def process_frame(self, frame, targets, save_image=False, log_callback=None):
         if self.sending_data:
@@ -597,12 +555,10 @@ class DetectionEngine:
         targetz = [t.strip() for t in targets.split(",") if t.strip()]
         if self.target_detected_start_time is None:
             self.target_detected_start_time = {target: None for target in targetz}
-
         try:
             detect_time = int(self.config.get("min_detect_time", 2))
         except ValueError:
             detect_time = 2
-
         for target in targetz:
             if target in detections:
                 current_time = time.time()
